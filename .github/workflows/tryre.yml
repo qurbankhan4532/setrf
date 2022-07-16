@@ -1,27 +1,53 @@
-name: CI
+name: Build
 
-on: [push, workflow_dispatch]
+on:
+  pull_request:
+    paths-ignore:
+      - '**.md'
+  push:
+    paths-ignore:
+      - '**.md'
+    branches:
+      - master
+    tags:
+      - v**
 
 jobs:
-  build:
-
-    runs-on: windows-latest
-
+  build-docker:
+    name: Build docker image
+    runs-on: ubuntu-latest
     steps:
-    - name: Download
-      run: Invoke-WebRequest https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-windows-amd64.zip -OutFile ngrok.zip
-    - name: Extract
-      run: Expand-Archive ngrok.zip
-    - name: Auth
-      run: .\ngrok\ngrok.exe authtoken $Env:NGROK_AUTH_TOKEN
-      env:
-        NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
-    - name: Enable TS
-      run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server'-name "fDenyTSConnections" -Value 0
-    - run: Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-    - run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
-    - run: Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "P@ssw0rd!" -Force)
-    - name: Create Tunnel
-      run: .\ngrok\ngrok.exe tcp 3389
-      
-    
+    - uses: actions/checkout@v3
+    - name: Generate Docker meta names
+      uses: docker/metadata-action@v3
+      id: meta
+      with:
+        images: convictional/trigger-workflow-and-wait
+        tags: |
+          type=ref,event=tag
+          type=raw,enable=${{ !startsWith(github.ref, 'refs/tags/') }},value=master
+    - name: Build Docker image
+      uses: docker/build-push-action@v2
+      with:
+        push: false
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        context: .
+
+  self-test:
+    name: Run self-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: ./
+        with:
+          owner: ${{ github.repository_owner }}
+          repo: trigger-workflow-and-wait
+          ref: ${{ github.event.repository.default_branch || 'master' }}
+          github_token: ${{ secrets.SECRET_PERSONAL_TOKEN }}
+          workflow_file_name: selftest.yaml
+          client_payload: '{"test": "true"}'
+          wait_interval: 11
+          trigger_workflow: true
+          wait_workflow: true
+          propagate_failure: true
